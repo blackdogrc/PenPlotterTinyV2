@@ -122,10 +122,7 @@ static bool hasCode(const String& line, const char* code) {
 
     // Skip the rest of this word so letters in its value aren't treated
     // as separate command letters.
-    while (j < line.length() &&
-           !isspace(line[j]) &&
-           line[j] != ';' &&
-           line[j] != '(') {
+    while (j < line.length() && !isspace(line[j]) && line[j] != ';' && line[j] != '(') {
       ++j;
     }
     i = j - 1;
@@ -186,8 +183,7 @@ void Gcode::setOwnershipLockEnabled(bool enabled) {
   } else if (owner_ != NONE) {
     lastActivityMs_ = millis();
   }
-Debugger::log(String("USB/web ownership lock ") +
-              (enabled ? "enabled" : "disabled"));
+  Debugger::log(String("USB/web ownership lock ") + (enabled ? "enabled" : "disabled"));
 }
 
 
@@ -217,7 +213,7 @@ void Gcode::clearQueue() {
 }
 void Gcode::stop() {
   const bool moveWasBusy = motion_.busy();
-  
+
   clearQueue();
 
   if (pendingMotionLineValid_) {
@@ -247,15 +243,17 @@ void Gcode::service() {
     owner_ = NONE;
   }
 
- if (motion_.busy()) return;
+  if (motion_.busy()) return;
 
-// Motion::service() has finished the pending move.
-if (pendingMotionLineValid_) {
-  completedLine_ = pendingMotionLine_;
-  pendingMotionLine_ = 0;
-  pendingMotionLineValid_ = false;
-}
-
+  // Motion::service() has finished the pending move.
+  if (pendingMotionLineValid_) {
+    completedLine_ = pendingMotionLine_;
+    pendingMotionLine_ = 0;
+    pendingMotionLineValid_ = false;
+  }
+  // Do not execute later G-code (such as M5 or M30) until all
+  // previously queued planner moves have run.
+  if (!motion_.plannerEmpty()) return;
   if (endPending_) {
     endPending_ = false;
     if (count_ == 0) owner_ = NONE;
@@ -268,24 +266,24 @@ if (pendingMotionLineValid_) {
   head_ = (head_ + 1) % QUEUE_SIZE;
   --count_;
 
-currentLine_ = e.lineNumber;
+  currentLine_ = e.lineNumber;
 
-const bool executed = executeLine(e.text);
+  const bool executed = executeLine(e.text);
 
-if (executed && e.lineNumber != 0) {
-  if (motion_.busy()) {
-    // The command started a move; commit its line after motion completes.
-    pendingMotionLine_ = e.lineNumber;
-    pendingMotionLineValid_ = true;
-  } else {
-    // Non-motion command, home, or no-op completed synchronously.
-    completedLine_ = e.lineNumber;
+  if (executed && e.lineNumber != 0) {
+    if (motion_.busy()) {
+      // The command started a move; commit its line after motion completes.
+      pendingMotionLine_ = e.lineNumber;
+      pendingMotionLineValid_ = true;
+    } else {
+      // Non-motion command, home, or no-op completed synchronously.
+      completedLine_ = e.lineNumber;
+    }
   }
-}
 
   if (e.endsJob) endPending_ = true;
 
-  if (!motion_.busy() && endPending_ && count_ == 0) {
+  if (!motion_.busy() && motion_.plannerEmpty() && endPending_ && count_ == 0) {
     endPending_ = false;
     owner_ = NONE;
   }
@@ -339,8 +337,7 @@ bool Gcode::executeLine(const String& input) {
   // Pen commands: M3/M4 down; M5/M9 up.
   if (hasCode(line, "M5") || hasCode(line, "M9")) motion_.pen(true);
 
-  if (hasCode(line, "M3 ") || line == "M3" ||
-      hasCode(line, "M4 ") || line == "M4") {
+  if (hasCode(line, "M3 ") || line == "M3" || hasCode(line, "M4 ") || line == "M4") {
     motion_.pen(false);
   }
 
@@ -391,15 +388,15 @@ bool Gcode::executeLine(const String& input) {
   // Motion::moveTo() caps that request to the X/Y max rates.
   // G1 uses the explicit or modal F value.
   const float requestedFeed =
-      rapidMove ? MAX_FEED_MM_MIN : feed_ * scale;
+    rapidMove ? MAX_FEED_MM_MIN : feed_ * scale;
 
   if (!motion_.enqueuePlannedMove(x, y, requestedFeed)) {
-  return false;
-}
+    return false;
+  }
 
-plannedX_ = x;
-plannedY_ = y;
-return true;
+  plannedX_ = x;
+  plannedY_ = y;
+  return true;
 }
 
 
