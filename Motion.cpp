@@ -14,8 +14,8 @@ static AccelStepper xMotor(
   AccelStepper::FULL4WIRE,
   X_IN1_PIN, X_IN3_PIN, X_IN2_PIN, X_IN4_PIN);
 
-static AccelStepper yMotor(  AccelStepper::FULL4WIRE,
-  Y_IN1_PIN, Y_IN3_PIN, Y_IN2_PIN, Y_IN4_PIN);
+static AccelStepper yMotor(AccelStepper::FULL4WIRE,
+                           Y_IN1_PIN, Y_IN3_PIN, Y_IN2_PIN, Y_IN4_PIN);
 #else
 static AccelStepper xMotor(
   AccelStepper::DRIVER, X_STEP_PIN, X_DIR_PIN);
@@ -89,8 +89,8 @@ void Motion::service() {
 
   if (xMotor.distanceToGo() == 0 && yMotor.distanceToGo() == 0) {
     busy_ = false;
-    xMm_ = xMotor.currentPosition() / xStepsPerMm_;
-    yMm_ = yMotor.currentPosition() / yStepsPerMm_;
+    xMm_ = X_MOTOR_DIRECTION * xMotor.currentPosition() / xStepsPerMm_;
+    yMm_ = Y_MOTOR_DIRECTION * yMotor.currentPosition() / yStepsPerMm_;
     // Keep your existing completion logging here.
     const uint32_t elapsedMs = millis() - moveStartedMs;
 
@@ -132,13 +132,11 @@ bool Motion::moveTo(float xMm, float yMm, float feedMmMin) {
     feedMmMin = MAX_FEED_MM_MIN;
   }
 
-  const long xt = lroundf(xMm * xStepsPerMm_);
-  const long yt = lroundf(yMm * yStepsPerMm_);
+  const long xt = X_MOTOR_DIRECTION * lroundf(xMm * xStepsPerMm_);
+  const long yt = Y_MOTOR_DIRECTION * lroundf(yMm * yStepsPerMm_);
 
-  const double dx =
-    (static_cast<double>(xt) - xMotor.currentPosition()) / xStepsPerMm_;
-  const double dy =
-    (static_cast<double>(yt) - yMotor.currentPosition()) / yStepsPerMm_;
+  const double dx =  (static_cast<double>(xt) - xMotor.currentPosition()) / xStepsPerMm_;
+  const double dy =  (static_cast<double>(yt) - yMotor.currentPosition()) / yStepsPerMm_;
   const double distance = hypot(dx, dy);
 
   if (!isfinite(distance)) {
@@ -250,8 +248,8 @@ bool Motion::popPlannedMove(PlannedMove& move) {
 bool Motion::switchPressed(int pin) {
   const int value = digitalRead(pin);
   const bool activeLow = (pin == X_MIN_PIN)
-      ? xEndstopActiveLow_
-      : yEndstopActiveLow_;
+                           ? xEndstopActiveLow_
+                           : yEndstopActiveLow_;
 
   return activeLow ? value == LOW : value == HIGH;
 }
@@ -269,7 +267,8 @@ bool Motion::home() {
   long traveled = 0;
   while (traveled < HOMING_MAX_SEEK_STEPS_X && !switchPressed(X_MIN_PIN)) {
     long start = xMotor.currentPosition();
-    xMotor.move(-HOMING_CHUNK_SIZE);  // relative move toward the switch
+    xMotor.move(-X_MOTOR_DIRECTION * HOMING_CHUNK_SIZE);
+
     //run the motor a small chunk.
     while (xMotor.distanceToGo() != 0 && !switchPressed(X_MIN_PIN)) {
       xMotor.run();
@@ -283,7 +282,7 @@ bool Motion::home() {
 
   //move away from the stop
   xMotor.setCurrentPosition(0);
-  xMotor.moveTo(lroundf(HOME_BACKOFF_MM * xStepsPerMm_));
+  xMotor.moveTo(X_MOTOR_DIRECTION * lroundf(HOME_BACKOFF_MM * xStepsPerMm_));
 
   while (xMotor.distanceToGo() != 0) {
     xMotor.run();
@@ -300,7 +299,7 @@ bool Motion::home() {
   traveled = 0;
   while (traveled < HOMING_MAX_SEEK_STEPS_Y && !switchPressed(Y_MIN_PIN)) {
     long start = yMotor.currentPosition();
-    yMotor.move(-HOMING_CHUNK_SIZE);  // relative move toward the switch
+    yMotor.move(-Y_MOTOR_DIRECTION * HOMING_CHUNK_SIZE);
     //run the motor a small chunk.
     while (yMotor.distanceToGo() != 0 && !switchPressed(Y_MIN_PIN)) {
       yMotor.run();
@@ -332,12 +331,12 @@ void Motion::setPosition(float xMm, float yMm) {
     Debugger::log("setPosition rejected: motion is busy");
     return;
   }
+  long pos = X_MOTOR_DIRECTION * lroundf(xMm * xStepsPerMm_);
 
-  long pos = lroundf(xMm * xStepsPerMm_);
   Debugger::log(String("setCurrentPosition X=") + String(pos));
   xMotor.setCurrentPosition(pos);
 
-  pos = lroundf(yMm * yStepsPerMm_);
+  pos = Y_MOTOR_DIRECTION * lroundf(yMm * yStepsPerMm_);
   Debugger::log(String("setCurrentPosition Y=") + String(pos));
   yMotor.setCurrentPosition(pos);
 
@@ -356,8 +355,8 @@ void Motion::stop() {
 
   xMotor.setCurrentPosition(xMotor.currentPosition());
   yMotor.setCurrentPosition(yMotor.currentPosition());
-  xMm_ = xMotor.currentPosition() / xStepsPerMm_;
-  yMm_ = yMotor.currentPosition() / yStepsPerMm_;
+  xMm_ = X_MOTOR_DIRECTION * xMotor.currentPosition() / xStepsPerMm_;
+  yMm_ = Y_MOTOR_DIRECTION * yMotor.currentPosition() / yStepsPerMm_;
   busy_ = false;
   movePaused_ = false;
   pen(true);  // stop still safely raises the physical pen
@@ -373,8 +372,8 @@ void Motion::pause() {
   xMotor.setCurrentPosition(xMotor.currentPosition());
   yMotor.setCurrentPosition(yMotor.currentPosition());
 
-  xMm_ = xMotor.currentPosition() / xStepsPerMm_;
-  yMm_ = yMotor.currentPosition() / yStepsPerMm_;
+  xMm_ = X_MOTOR_DIRECTION * xMotor.currentPosition() / xStepsPerMm_;
+  yMm_ = Y_MOTOR_DIRECTION * yMotor.currentPosition() / yStepsPerMm_;
   busy_ = false;
   movePaused_ = true;
 }
@@ -414,8 +413,8 @@ bool Motion::setStepsPerMm(float x, float y) {
   yStepsPerMm_ = y;
 
   // Keep the reported coordinates consistent with the current motor steps.
-  xMm_ = xMotor.currentPosition() / xStepsPerMm_;
-  yMm_ = yMotor.currentPosition() / yStepsPerMm_;
+  xMm_ = X_MOTOR_DIRECTION * xMotor.currentPosition() / xStepsPerMm_;
+  yMm_ = Y_MOTOR_DIRECTION * yMotor.currentPosition() / yStepsPerMm_;
   return true;
 }
 
