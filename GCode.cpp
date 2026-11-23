@@ -9,6 +9,14 @@
 #include <ctype.h>
 #include <stdlib.h>
 
+void startJob() {
+  motion_.clearPlanner();
+
+  plannedX_ = motion_.x();
+  plannedY_ = motion_.y();
+  plannedPositionValid_ = true;
+}
+
 static bool wordValue(const String& line, char wantedLetter, float& value) {
   wantedLetter = toupper(wantedLetter);
   bool inParenComment = false;
@@ -243,7 +251,19 @@ void Gcode::service() {
     owner_ = NONE;
   }
 
-  if (motion_.busy()) return;
+  if (motion_.busy()) {
+    if (textQueueEmpty()) return;
+
+    const String& nextLine = peekTextQueue();
+
+    if (!isMotionLine(nextLine)) return;
+    if (motion_.plannerFull()) return;
+
+    // Now remove this line and parse/enqueue it.
+    // Do not remove it before confirming there's planner capacity.
+    processNextLine();
+    return;
+  }
 
   // Motion::service() has finished the pending move.
   if (pendingMotionLineValid_) {

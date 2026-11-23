@@ -203,6 +203,13 @@ bool Motion::plannerEmpty() const {
   return plannerCount_ == 0;
 }
 
+void Motion::clearPlanner() {
+  plannerHead_ = 0;
+  plannerTail_ = 0;
+  plannerCount_ = 0;
+}
+
+
 bool Motion::plannerFull() const {
   return plannerCount_ >= PLANNER_CAPACITY;
 }
@@ -351,6 +358,7 @@ void Motion::pen(bool up) {
 }
 
 void Motion::stop() {
+  clearPlanner();
   penUpBeforeStop_ = penUp_;  // capture the state before raising the pen
 
   xMotor.setCurrentPosition(xMotor.currentPosition());

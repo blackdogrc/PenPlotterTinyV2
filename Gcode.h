@@ -7,6 +7,7 @@
 
 class Gcode {
 public:
+  void startJob();
   float xStepsPerMm() const {
     return motion_.xStepsPerMm();
   }

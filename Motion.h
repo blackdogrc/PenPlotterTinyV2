@@ -41,6 +41,7 @@ public:
   void pause();
   void resume();
   void setMaxSpeed(AccelStepper& motor, String axis, int max);
+  void clearPlanner();
 
   float x() const {
     return xMm_;
