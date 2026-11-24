@@ -7,7 +7,7 @@
 
 class Gcode {
 public:
-  void startJob();
+ void startJob(); 
   float xStepsPerMm() const {
     return motion_.xStepsPerMm();
   }
@@ -83,9 +83,11 @@ private:
   float plannedX_ = 0.0f;
   float plannedY_ = 0.0f;
   bool plannedPositionValid_ = false;
+bool textQueueEmpty() const;
+const String& peekTextQueue() const;
+bool isMotionLine(const String& line) const;
+void processNextLine();
 
-
-private:
   static constexpr uint8_t QUEUE_SIZE = 24;
 
   struct Entry {
