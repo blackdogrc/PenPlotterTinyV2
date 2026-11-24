@@ -9,13 +9,14 @@
 #include <ctype.h>
 #include <stdlib.h>
 
-void startJob() {
+void Gcode::startJob() {
   motion_.clearPlanner();
 
   plannedX_ = motion_.x();
   plannedY_ = motion_.y();
   plannedPositionValid_ = true;
 }
+
 
 static bool wordValue(const String& line, char wantedLetter, float& value) {
   wantedLetter = toupper(wantedLetter);
@@ -238,6 +239,67 @@ void Gcode::stop() {
   endPending_ = false;
   owner_ = NONE;
   checkpointReady_ = true;
+}
+bool Gcode::textQueueEmpty() const {
+  return count_ == 0;
+}
+
+const String& Gcode::peekTextQueue() const {
+  return queue_[head_].text;
+}
+
+bool Gcode::isMotionLine(const String& line) const {
+  // Skip whitespace and an optional line number, e.g. "N12 G1 X10".
+  int i = 0;
+  while (i < line.length() && isspace(line[i])) ++i;
+
+  if (i < line.length() && (line[i] == 'N' || line[i] == 'n')) {
+    ++i;
+    while (i < line.length() && isdigit(line[i])) ++i;
+    while (i < line.length() && isspace(line[i])) ++i;
+  }
+
+  if (i >= line.length() || (line[i] != 'G' && line[i] != 'g')) return false;
+  ++i;
+
+  while (i < line.length() && isspace(line[i])) ++i;
+  if (i >= line.length() || !isdigit(line[i])) return false;
+
+  int code = 0;
+  while (i < line.length() && isdigit(line[i])) {
+    code = code * 10 + (line[i] - '0');
+    ++i;
+  }
+
+  // Only G0/G00 and G1/G01 are queued motion moves.
+  if (code != 0 && code != 1) return false;
+
+  // Reject codes such as G10 or G1.1.
+  if (i < line.length() &&
+      (isdigit(line[i]) || line[i] == '.')) return false;
+
+  return true;
+}
+
+void Gcode::processNextLine() {
+  Entry e = queue_[head_];
+  queue_[head_].text = "";
+  head_ = (head_ + 1) % QUEUE_SIZE;
+  --count_;
+
+  currentLine_ = e.lineNumber;
+  const bool executed = executeLine(e.text);
+
+  if (executed && e.lineNumber != 0) {
+    if (motion_.busy()) {
+      pendingMotionLine_ = e.lineNumber;
+      pendingMotionLineValid_ = true;
+    } else {
+      completedLine_ = e.lineNumber;
+    }
+  }
+
+  if (e.endsJob) endPending_ = true;
 }
 
 void Gcode::service() {

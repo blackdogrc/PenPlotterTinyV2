@@ -36,18 +36,16 @@ constexpr int8_t Y_MOTOR_DIRECTION = -1;
 constexpr float X_STEPS_PER_MM = 52.8;//300.95f;
 constexpr float Y_STEPS_PER_MM = 52.8;//300.95f;
 
-constexpr long BEDSIZE_X = 100;  // mm
+constexpr long BEDSIZE_X = 90;  // mm
 constexpr long BEDSIZE_Y = 100;  // mm
 
 //Assume 28BYJ48, 20 tooth gear, GT2 belt.
 // Conservative starting values for testing, not final performance limits.
-constexpr float MAX_FEED_MM_MIN = 1500.0f;
+constexpr float MAX_FEED_MM_MIN = 2000.0f;
 constexpr float HOMING_FEED_MM_MIN = 300.0f;
 constexpr float MAX_ACCELERATION_MM_S2 = 200.0f;  // steps/s^2
-
 constexpr long HOMING_MAX_SEEK_STEPS_X = lroundf(BEDSIZE_X * X_STEPS_PER_MM);
 constexpr long HOMING_MAX_SEEK_STEPS_Y = lroundf(BEDSIZE_Y * Y_STEPS_PER_MM);
-
 constexpr long HOMING_CHUNK_SIZE = 100;  // steps; about 2 mm at 51 steps/mm
 #else
 constexpr int X_STEP_PIN = 4;
@@ -60,9 +58,9 @@ constexpr float X_STEPS_PER_MM = 80.0f;
 constexpr float Y_STEPS_PER_MM = 80.0f;
 constexpr long BEDSIZE_X = 240;
 constexpr long BEDSIZE_Y = 320;
-constexpr float MAX_FEED_MM_MIN = 20000.0f;
-constexpr float MAX_ACCELERATION = 3000.0f;
-constexpr float HOMING_FEED_MM_MIN = 2000.0f;              //not to fast homing speed.  it could slam into the end stop.
+constexpr float MAX_FEED_MM_MIN = 1500.0f;
+constexpr float MAX_ACCELERATION = 300.0f;
+constexpr float HOMING_FEED_MM_MIN = 1500.0f;              //not to fast homing speed.  it could slam into the end stop.
 constexpr float HOMING_CHUNK_SIZE = 10 * 80.0f;            //1cm
 constexpr long HOMING_MAX_SEEK_STEPS_X = BEDSIZE_X * 80L;  //Maximun travel before we give up.
 constexpr long HOMING_MAX_SEEK_STEPS_Y = BEDSIZE_Y * 80L;  //Maximun travel before we give up.
