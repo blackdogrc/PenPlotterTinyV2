@@ -23,16 +23,7 @@ function showTab(id) {
   document.getElementById(id).classList.add('active');
 }
 
-async function frame() {
-  if (!currentFrameCommands.length) {
-    alert('Generate G-code before framing.');
-    return;
-  }
 
-  for (const command of currentFrameCommands) {
-    await runControlCommand(command);
-    }
-}
 
 function log(message) {
   if (consolePaused) {
@@ -552,19 +543,40 @@ async function updateSvgInfo(file) {
     status.textContent = `Could not read SVG: ${error.message}`;
   }
 }
-//Method to make frame command
-function makeFrameCommands(maxX, maxY) {
-  const feedRate = 4000;
+const DRAWING_FEED_KEY = 'drawingFeedRate';
+
+async function getFrameFeedRate() {
+  const response = await fetch('/api/motion-limits');
+  if (!response.ok) throw new Error('Could not load motion feed limits');
+
+  const limits = await response.json();
+  const maxFeed = Number(limits.maxFeed);
+  const defaultFeed = Number(limits.defaultFeed);
+
+  const saved = localStorage.getItem(DRAWING_FEED_KEY);
+  const savedFeed = saved === null ? NaN : Number(saved);
+
+  const preferredFeed = Number.isFinite(savedFeed) && savedFeed > 0
+    ? savedFeed
+    : defaultFeed;
+  
+  return Math.min(preferredFeed, maxFeed);
+}
+
+async function makeFrameCommands(maxX, maxY) {
+  const feedRate = await getFrameFeedRate();
+
   return [
     'G28 X0 Y0',
     'M5',
-    'G0 X0 Y0',
     `G1 X${maxX.toFixed(3)} Y0 F${feedRate}`,
     `G1 X${maxX.toFixed(3)} Y${maxY.toFixed(3)} F${feedRate}`,
     `G1 X0 Y${maxY.toFixed(3)} F${feedRate}`,
-    'G1 X0 Y0 F${feedRate}',
+    `G1 X0 Y0 F${feedRate}`,
   ];
 }
+
+
 function previewSvg(input) {
 
   const hasFile = Boolean(input.files && input.files.length);
@@ -642,15 +654,34 @@ async function restartJob() {
   }
 }
 
-async function runControlCommand(gcode) {
-  console.log('Sending control command:', gcode);
+async function frame() {
+  if (!currentFrameCommands.length) {
+    log('Generate G-code before framing.');
+    return;
+  }
+  if (jobRunning) {
+    log('Cannot frame while a G-code job is running.');
+    return;
+  }
 
+  try {
+    log('Frame started');
+    for (const command of currentFrameCommands) {
+      await runControlCommand(command);
+    }
+    log('Frame complete');
+  } catch (error) {
+    log('Frame failed: ' + error.message);
+  }
+}
+
+async function runControlCommand(gcode) {
+  log('Sending: ' + gcode);
   const response = await fetch(
     '/api/cmd?g=' + encodeURIComponent(gcode)
   );
   const message = await response.text();
-
-  console.log('Control command response:', response.status, message);
+  log(`Response (${response.status}): ${message}`);
 
   if (!response.ok) throw new Error(message);
 
@@ -658,11 +689,13 @@ async function runControlCommand(gcode) {
     const statusResponse = await fetch('/api/status');
     if (statusResponse.ok) {
       const status = await statusResponse.json();
+      if (status.debug) {
+        log(status.debug);
+      }
       if (!status.busy) return;
     }
     await sleep(250);
   }
-
   throw new Error('Timed out waiting for ' + gcode);
 }
   
@@ -789,26 +822,50 @@ function calculateSteps(axis) {
   saveButton.disabled = false;
 }
 
-const DRAWING_FEED_KEY = 'drawingFeedRate';
-const DEFAULT_DRAWING_FEED = 4000;
-const MAX_DRAWING_FEED = 10000;
 
-function loadDrawingFeedRate() {
+
+async function loadDrawingFeedRate() {
   const input = document.getElementById('drawingFeedRate');
   if (!input) return;
 
-  const saved = Number(localStorage.getItem(DRAWING_FEED_KEY));
-  if (Number.isFinite(saved) && saved >= 1 && saved <= MAX_DRAWING_FEED) {
-    input.value = String(saved);
+  const response = await fetch('/api/motion-limits');
+  if (!response.ok) throw new Error('Could not load motion feed limits');
+
+  const limits = await response.json();
+  const maxFeed = Number(limits.maxFeed);
+  const defaultFeed = Number(limits.defaultFeed);
+
+  if (!Number.isFinite(maxFeed) || maxFeed < 1 ||
+      !Number.isFinite(defaultFeed) || defaultFeed < 1) {
+    throw new Error('Invalid motion feed limits');
   }
+
+  input.max = String(maxFeed);
+
+  const rawSaved = localStorage.getItem(DRAWING_FEED_KEY);
+  const saved = rawSaved === null ? NaN : Number(rawSaved);
+  const feedRate = Number.isFinite(saved) && saved >= 1
+    ? Math.min(saved, maxFeed)
+    : Math.min(defaultFeed, maxFeed);
+
+  input.value = String(feedRate);
 }
 
 function saveDrawingFeedRate() {
   const input = document.getElementById('drawingFeedRate');
-  const value = Number(input.value);
+  if (!input) return false;
 
-  if (!Number.isFinite(value) || value < 1 || value > MAX_DRAWING_FEED) {
-    input.setCustomValidity( 'Enter a feed from 1 to' + MAX_DRAWING_FEED );
+  const value = Number(input.value);
+  const maxFeed = Number(input.max);
+
+  if (!Number.isFinite(maxFeed) || maxFeed < 1) {
+    input.setCustomValidity('Feed-rate limit has not loaded yet.');
+    input.reportValidity();
+    return false;
+  }
+
+  if (!Number.isFinite(value) || value < 1 || value > maxFeed) {
+    input.setCustomValidity(`Enter a feed from 1 to ${maxFeed} mm/min.`);
     input.reportValidity();
     return false;
   }
@@ -818,6 +875,7 @@ function saveDrawingFeedRate() {
   localStorage.setItem(DRAWING_FEED_KEY, input.value);
   return true;
 }
+
 
 
 async function generateSvgGcode(switchToGCodeTab=false) {
@@ -873,7 +931,10 @@ async function generateSvgGcode(switchToGCodeTab=false) {
 
 const s = result.stats;
 
-currentFrameCommands = makeFrameCommands(  result.stats.maxX,  result.stats.maxY);
+currentFrameCommands = await makeFrameCommands(
+  result.stats.maxX,
+  result.stats.maxY
+);
 document.getElementById('convertedFileSize').textContent =
   `${(s.inputBytes / 1024).toFixed(1)} KB`;
 

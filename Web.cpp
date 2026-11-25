@@ -350,7 +350,7 @@ pre{white-space:pre-wrap;background:#eee;padding:10px;max-height:180px;overflow:
     <label>
       Drawing feed (mm/min):
       <input id="drawingFeedRate" type="number"
-             min="1" max="3000" step="10" value="1500"
+             min="1" max="9000" step="10" value="1500"
              onchange="saveDrawingFeedRate()">
     </label>
   </p>
@@ -772,7 +772,14 @@ void webBegin(Gcode& gcode) {
 
     server.send(200, "text/plain", "Command queued");
   });
-
+  server.on("/api/motion-limits", HTTP_GET, []() {
+    server.send(
+      200,
+      "application/json",
+      String("{\"maxFeed\":") + String(MAX_FEED_MM_MIN, 0) +
+      ",\"defaultFeed\":" + String(DEFAULT_DRAWING_FEED_MM_MIN, 0) + "}"
+    );
+  });
   server.on("/api/jog", HTTP_GET, []() {
     Debugger::log("API GET /api/jog");
     if (parser->busy()) {
