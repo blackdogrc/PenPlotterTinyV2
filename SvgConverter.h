@@ -1,9 +1,3 @@
-/******
-**.  TINYPenPlotter V2
-*/
-#pragma once
-#include <Arduino.h>
-
 static const char SVG_CONVERTER_JS[] PROGMEM = R"SVGJS(
 class SvgConverter {
   static NS = 'http://www.w3.org/2000/svg';
@@ -28,7 +22,6 @@ class SvgConverter {
   }
 
   static clipSegment(a, b, width, height) {
-    // Liang-Barsky clipping against the plotter's usable area.
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const p = [-dx, dx, -dy, dy];
@@ -41,7 +34,9 @@ class SvgConverter {
         if (q[i] < 0) return null;
         continue;
       }
+
       const r = q[i] / p[i];
+
       if (p[i] < 0) {
         if (r > t1) return null;
         if (r > t0) t0 = r;
@@ -56,103 +51,177 @@ class SvgConverter {
       { x: a.x + t1 * dx, y: a.y + t1 * dy }
     ];
   }
-static simplifyAxisAligned(points) {
-  if (points.length < 3) return points;
 
-  const result = [points[0]];
-  const rounded = v => Math.round(v * 1000) / 1000;
+  // Iterative Ramer–Douglas–Peucker simplification.
+  // Points and tolerance are in plotted millimeters.
+  static simplifyPolyline(points, tolerance = 0.15) {
+    if (points.length < 3 || tolerance <= 0) return points;
 
-  for (let i = 1; i < points.length; i++) {
-    const next = points[i];
+    const toleranceSq = tolerance * tolerance;
+    const keep = new Uint8Array(points.length);
+    keep[0] = 1;
+    keep[points.length - 1] = 1;
 
-    if (result.length >= 2) {
-      const a = result[result.length - 2];
-      const b = result[result.length - 1];
+    const stack = [[0, points.length - 1]];
 
-      const ax = rounded(a.x);
-      const ay = rounded(a.y);
-      const bx = rounded(b.x);
-      const by = rounded(b.y);
-      const cx = rounded(next.x);
-      const cy = rounded(next.y);
+    while (stack.length) {
+      const [first, last] = stack.pop();
+      const a = points[first];
+      const b = points[last];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const lengthSq = dx * dx + dy * dy;
 
-      const horizontal =
-        ay === by && by === cy &&
-        (bx - ax) * (cx - bx) >= 0;
+      let maxDistanceSq = 0;
+      let farthest = -1;
 
-      const vertical =
-        ax === bx && bx === cx &&
-        (by - ay) * (cy - by) >= 0;
+      for (let i = first + 1; i < last; i++) {
+        const p = points[i];
 
-      if (horizontal || vertical) {
-        // The middle point is redundant; keep the new endpoint instead.
-        result[result.length - 1] = next;
-        continue;
-      }
-    }
+        let t = lengthSq === 0
+          ? 0
+          : ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq;
 
-    result.push(next);
-  }
+        t = Math.max(0, Math.min(1, t));
 
-  return result;
-}
-static joinContinuousSegments(lines) {
-  const result = [];
-  let previousEnd = null;
+        const nearestX = a.x + t * dx;
+        const nearestY = a.y + t * dy;
+        const distanceSq =
+          (p.x - nearestX) * (p.x - nearestX) +
+          (p.y - nearestY) * (p.y - nearestY);
 
-  const parseXY = (line, command) => {
-    const match = line.match(
-      new RegExp(
-        '^' + command +
-        '\\s+X([-+]?\\d+(?:\\.\\d+)?)' +
-        '\\s+Y([-+]?\\d+(?:\\.\\d+)?)\\b'
-      )
-    );
-    return match
-      ? { x: Number(match[1]), y: Number(match[2]) }
-      : null;
-  };
-
-  const samePoint = (a, b) =>
-    Math.abs(a.x - b.x) <= 0.001 &&
-    Math.abs(a.y - b.y) <= 0.001;
-
-  for (let i = 0; i < lines.length;) {
-    // Recognize the converter's per-segment block:
-    // M5, G0 start, M3, G1 end.
-    if (
-      lines[i] === 'M5' &&
-      i + 3 < lines.length &&
-      lines[i + 2] === 'M3'
-    ) {
-      const start = parseXY(lines[i + 1], 'G0');
-      const end = parseXY(lines[i + 3], 'G1');
-
-      if (start && end) {
-        if (previousEnd && samePoint(previousEnd, start)) {
-          // Stay pen-down and omit this segment's M5/G0/M3.
-          result.push(lines[i + 3]);
-        } else {
-          // Keep the pen-up/reposition/pen-down for a real gap.
-          result.push(lines[i], lines[i + 1], lines[i + 2], lines[i + 3]);
+        if (distanceSq > maxDistanceSq) {
+          maxDistanceSq = distanceSq;
+          farthest = i;
         }
+      }
 
-        previousEnd = end;
-        i += 4;
-        continue;
+      if (farthest !== -1 && maxDistanceSq > toleranceSq) {
+        keep[farthest] = 1;
+        stack.push([first, farthest], [farthest, last]);
       }
     }
 
-    // Other commands, including the final M5/M30, are kept unchanged.
-    result.push(lines[i]);
-    previousEnd = null;
-    i++;
+    return points.filter((_, i) => keep[i]);
   }
 
-  return result;
-}
+  // Remove redundant points along straight horizontal or vertical runs.
+  static simplifyAxisAligned(points) {
+    if (points.length < 3) return points;
 
-  static async convert(file, width, height, mode,drawingFeed) {
+    const result = [points[0]];
+    const rounded = v => Math.round(v * 1000) / 1000;
+
+    for (let i = 1; i < points.length; i++) {
+      const next = points[i];
+
+      if (result.length >= 2) {
+        const a = result[result.length - 2];
+        const b = result[result.length - 1];
+
+        const ax = rounded(a.x);
+        const ay = rounded(a.y);
+        const bx = rounded(b.x);
+        const by = rounded(b.y);
+        const cx = rounded(next.x);
+        const cy = rounded(next.y);
+
+        const horizontal =
+          ay === by && by === cy &&
+          (bx - ax) * (cx - bx) >= 0;
+
+        const vertical =
+          ax === bx && bx === cx &&
+          (by - ay) * (cy - by) >= 0;
+
+        if (horizontal || vertical) {
+          result[result.length - 1] = next;
+          continue;
+        }
+      }
+
+      result.push(next);
+    }
+
+    return result;
+  }
+
+  // Join adjacent segment blocks when their endpoints meet.
+  static joinContinuousSegments(lines) {
+    const result = [];
+    let previousEnd = null;
+
+    const parseXY = (line, command) => {
+      const match = line.match(
+        new RegExp(
+          '^' + command +
+          '\\s+X([-+]?\\d+(?:\\.\\d+)?)' +
+          '\\s+Y([-+]?\\d+(?:\\.\\d+)?)\\b'
+        )
+      );
+
+      return match
+        ? { x: Number(match[1]), y: Number(match[2]) }
+        : null;
+    };
+
+    const samePoint = (a, b) =>
+      Math.abs(a.x - b.x) <= 0.001 &&
+      Math.abs(a.y - b.y) <= 0.001;
+
+    for (let i = 0; i < lines.length;) {
+      if (
+        lines[i] === 'M5' &&
+        i + 3 < lines.length &&
+        lines[i + 2] === 'M3'
+      ) {
+        const start = parseXY(lines[i + 1], 'G0');
+        const end = parseXY(lines[i + 3], 'G1');
+
+        if (start && end) {
+          if (previousEnd && samePoint(previousEnd, start)) {
+            result.push(lines[i + 3]);
+          } else {
+            result.push(
+              lines[i],
+              lines[i + 1],
+              lines[i + 2],
+              lines[i + 3]
+            );
+          }
+
+          previousEnd = end;
+          i += 4;
+          continue;
+        }
+      }
+
+      result.push(lines[i]);
+      previousEnd = null;
+      i++;
+    }
+
+    return result;
+  }
+
+  static async convert(
+    file,
+    width,
+    height,
+    mode,
+    drawingFeed,
+    simplifyTolerance = 0.15,
+    ignoreViewBoxFrame = false
+  ) {
+    let maxX = 0;
+    let maxY = 0;
+    if (!Number.isFinite(simplifyTolerance) || simplifyTolerance < 0) {
+      throw new Error('Simplification tolerance must be zero or greater.');
+    }
+
+    let sampledPointCount = 0;
+    let simplifiedPointCount = 0;
+
     const source = await file.text();
     const doc = new DOMParser().parseFromString(source, 'image/svg+xml');
 
@@ -170,27 +239,35 @@ static joinContinuousSegments(lines) {
 
     if (viewBoxText) {
       const values = viewBoxText.trim().split(/[\s,]+/).map(Number);
-      if (values.length !== 4 || values.some(v => !Number.isFinite(v)) ||
-          values[2] <= 0 || values[3] <= 0) {
+
+      if (
+        values.length !== 4 ||
+        values.some(v => !Number.isFinite(v)) ||
+        values[2] <= 0 ||
+        values[3] <= 0
+      ) {
         throw new Error('The SVG has an invalid viewBox.');
       }
+
       vb = { x: values[0], y: values[1], w: values[2], h: values[3] };
     } else {
       const w = SvgConverter.numberWithUnit(root.getAttribute('width'), 0);
       const h = SvgConverter.numberWithUnit(root.getAttribute('height'), 0);
+
       if (w <= 0 || h <= 0) {
         throw new Error('SVG needs a viewBox or explicit width and height.');
       }
+
       vb = { x: 0, y: 0, w, h };
     }
 
-    // Determine the drawing's physical size. Explicit SVG units are converted
-    // to mm. Without physical units, viewBox units are treated as millimeters.
     const physicalW = SvgConverter.numberWithUnit(
-      root.getAttribute('width'), vb.w
+      root.getAttribute('width'),
+      vb.w
     );
     const physicalH = SvgConverter.numberWithUnit(
-      root.getAttribute('height'), vb.h
+      root.getAttribute('height'),
+      vb.h
     );
 
     let scale = 1;
@@ -203,30 +280,59 @@ static joinContinuousSegments(lines) {
     const offsetX = (width - drawnW) / 2;
     const offsetY = (height - drawnH) / 2;
 
-    // Attach the parsed SVG temporarily so browser SVG geometry methods and
-    // transforms can be evaluated.
+    // Attach the SVG temporarily so the browser can evaluate geometry
+    // and transforms.
     const host = document.createElementNS(SvgConverter.NS, 'svg');
-    host.setAttribute('viewBox',
-      `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+    host.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
     host.setAttribute('width', '1000');
     host.setAttribute('height', '1000');
     host.style.cssText =
       'position:fixed;left:-2000px;top:-2000px;width:1000px;height:1000px';
+
     document.body.appendChild(host);
 
     const imported = document.importNode(root, true);
     host.appendChild(imported);
 
     const rootMatrix = imported.getScreenCTM();
+
     if (!rootMatrix) {
       host.remove();
       throw new Error('Could not read SVG transforms.');
     }
+
     const inverse = rootMatrix.inverse();
 
-    const drawable = imported.querySelectorAll(
-      'path,line,polyline,polygon,rect,circle,ellipse'
-    );
+    const allDrawable = [
+      ...imported.querySelectorAll(
+        'path,line,polyline,polygon,rect,circle,ellipse'
+      )
+    ];
+
+    const closeTo = (a, b, tolerance = 0.01) =>
+      Math.abs(a - b) <= tolerance;
+
+    // Optionally skip a <rect> exactly matching the SVG viewBox.
+    // This does not detect frames drawn as paths or other shapes.
+    const drawable = allDrawable.filter(shape => {
+      if (!ignoreViewBoxFrame || shape.localName !== 'rect') return true;
+
+      const x = Number(shape.getAttribute('x') || 0);
+      const y = Number(shape.getAttribute('y') || 0);
+      const w = Number(shape.getAttribute('width'));
+      const h = Number(shape.getAttribute('height'));
+
+      const matchesViewBox =
+        Number.isFinite(w) &&
+        Number.isFinite(h) &&
+        closeTo(x, vb.x) &&
+        closeTo(y, vb.y) &&
+        closeTo(w, vb.w) &&
+        closeTo(h, vb.h);
+
+      return !matchesViewBox;
+    });
+
     if (!drawable.length) {
       host.remove();
       throw new Error('No supported drawing shapes were found in the SVG.');
@@ -235,112 +341,130 @@ static joinContinuousSegments(lines) {
     const paths = [];
     let unsupported = false;
 
-    for (const shape of drawable) {
-      if (typeof shape.getTotalLength !== 'function' ||
-          typeof shape.getPointAtLength !== 'function') {
-        unsupported = true;
-        continue;
-      }
+    try {
+      for (const shape of drawable) {
+        if (
+          typeof shape.getTotalLength !== 'function' ||
+          typeof shape.getPointAtLength !== 'function'
+        ) {
+          unsupported = true;
+          continue;
+        }
 
-      let length;
-      try {
-        length = shape.getTotalLength();
-      } catch (_) {
-        unsupported = true;
-        continue;
-      }
-      if (!Number.isFinite(length) || length <= 0) continue;
+        let length;
+        try {
+          length = shape.getTotalLength();
+        } catch (_) {
+          unsupported = true;
+          continue;
+        }
 
-      // Sample curves into short straight moves. Limit the number of samples
-      // per shape to keep generated G-code manageable.
-      const steps = Math.max(1, Math.min(3000, Math.ceil(length / 2)));
-      const points = [];
+        if (!Number.isFinite(length) || length <= 0) continue;
 
-      for (let i = 0; i <= steps; i++) {
-        const p = shape.getPointAtLength(length * i / steps);
+        // Limit sampling to at most 3000 steps for each shape.
+        const steps = Math.max(1, Math.min(3000, Math.ceil(length / 2)));
+        const points = [];
         const shapeMatrix = shape.getScreenCTM();
-        if (!shapeMatrix) continue;
 
-        const screenPoint =
-          new DOMPoint(p.x, p.y).matrixTransform(shapeMatrix);
-        const q = screenPoint.matrixTransform(inverse);
-        const x = (q.x - vb.x) * physicalW / vb.w * scale + offsetX;
-        const y = (q.y - vb.y) * physicalH / vb.h * scale + offsetY;
-        points.push({ x, y });
+        if (!shapeMatrix) {
+          unsupported = true;
+          continue;
+        }
+
+        for (let i = 0; i <= steps; i++) {
+          const p = shape.getPointAtLength(length * i / steps);
+          const screenPoint =
+            new DOMPoint(p.x, p.y).matrixTransform(shapeMatrix);
+          const q = screenPoint.matrixTransform(inverse);
+
+          const x =
+            (q.x - vb.x) * physicalW / vb.w * scale + offsetX;
+          const y =
+            (q.y - vb.y) * physicalH / vb.h * scale + offsetY;
+
+          points.push({ x, y });
+        }
+
+        sampledPointCount += points.length;
+
+        const cleaned = SvgConverter.simplifyAxisAligned(points);
+        const simplified = SvgConverter.simplifyPolyline(
+          cleaned,
+          simplifyTolerance
+        );
+
+        simplifiedPointCount += simplified.length;
+        paths.push(simplified);
       }
-      paths.push(SvgConverter.simplifyAxisAligned(points));
+    } finally {
+      host.remove();
     }
-
-    host.remove();
 
     if (!paths.length) {
       throw new Error('No usable paths were found in the SVG.');
     }
 
-   const out = ['G21', 'G90', 'M5'];
-let drawnSegments = 0;
-let feedWritten = false;
+    const out = ['G21', 'G90', 'M5'];
+    let drawnSegments = 0;
+    let feedWritten = false;
 
-for (const points of paths) {
-  let penDown = false;
-  let lastEnd = null;
+    for (const points of paths) {
+      let penDown = false;
+      let lastEnd = null;
 
-  for (let i = 1; i < points.length; i++) {
-    const clipped = SvgConverter.clipSegment(
-      points[i - 1], points[i], width, height
-    );
+      for (let i = 1; i < points.length; i++) {
+        const clipped = SvgConverter.clipSegment(
+          points[i - 1],
+          points[i],
+          width,
+          height
+        );
 
-    if (!clipped) {
-      // The path leaves the plot area. Lift the pen before the next
-      // visible segment, which may require a new rapid move.
+        if (!clipped) {
+          if (penDown) out.push('M5');
+          penDown = false;
+          lastEnd = null;
+          continue;
+        }
+
+        const [a, b] = clipped;
+        if (Math.hypot(b.x - a.x, b.y - a.y) < 0.001) continue;
+
+        maxX = Math.max(maxX, a.x, b.x);
+        maxY = Math.max(maxY, height - a.y, height - b.y);
+        if (Math.hypot(b.x - a.x, b.y - a.y) < 0.001) continue;
+
+        const samePoint = lastEnd &&
+          Math.hypot(lastEnd.x - a.x, lastEnd.y - a.y) < 0.01;
+
+        if (!penDown || !samePoint) {
+          if (penDown) out.push('M5');
+
+          out.push(
+            `G0 X${a.x.toFixed(3)} Y${(height - a.y).toFixed(3)}`,
+            'M3'
+          );
+          penDown = true;
+        }
+
+        const bx = b.x.toFixed(3);
+        const by = (height - b.y).toFixed(3);
+
+        if (!feedWritten) {
+          out.push(`G1 X${bx} Y${by} F${Math.round(drawingFeed)}`);
+          feedWritten = true;
+        } else {
+          out.push(`G1 X${bx} Y${by}`);
+        }
+
+        lastEnd = b;
+        drawnSegments++;
+      }
+
       if (penDown) out.push('M5');
-      penDown = false;
-      lastEnd = null;
-      continue;
     }
 
-    const [a, b] = clipped;
-
-    // Skip degenerate segments.
-    if (Math.hypot(b.x - a.x, b.y - a.y) < 0.001) continue;
-
-    const samePoint = lastEnd &&
-      Math.hypot(lastEnd.x - a.x, lastEnd.y - a.y) < 0.01;
-
-    // Start a new contour only when the pen is up or this segment
-    // does not continue from the previous segment's endpoint.
-    if (!penDown || !samePoint) {
-      if (penDown) out.push('M5');
-
-      const ax = a.x.toFixed(3);
-      const ay = (height - a.y).toFixed(3);
-
-      out.push(`G0 X${ax} Y${ay}`, 'M3');
-      penDown = true;
-    }
-
-    const bx = b.x.toFixed(3);
-    const by = (height - b.y).toFixed(3);
-
-    if (!feedWritten) {
-      out.push(
-        `G1 X${bx} Y${by} F${Math.round(drawingFeed)}`
-      );
-      feedWritten = true;
-    } else {
-      out.push(`G1 X${bx} Y${by}`);
-    }
-
-    lastEnd = b;
-    drawnSegments++;
-  }
-
-  // Lift before moving on to the next SVG shape.
-  if (penDown) out.push('M5');
-}
-
-out.push('M30');
-
+    out.push('M30');
 
     if (!drawnSegments) {
       throw new Error('Nothing from this SVG falls inside the plot area.');
@@ -348,12 +472,23 @@ out.push('M30');
 
     const optimizedOut = SvgConverter.joinContinuousSegments(out);
 
-return {
-  gcode: optimizedOut.join('\n'),
-  warning: unsupported
-    ? 'Some SVG shapes were skipped because they could not be converted.'
-    : ''
-};
+    return {
+      gcode: optimizedOut.join('\n'),
+      warning: unsupported
+        ? 'Some SVG shapes were skipped because they could not be converted.'
+        : '',
+      stats: {
+        inputBytes: file.size,
+        shapeCount: drawable.length,
+        sampledPointCount,
+        simplifiedPointCount,
+        removedPointCount: sampledPointCount - simplifiedPointCount,
+        simplifyTolerance,
+        gcodeLineCount: optimizedOut.length,
+        maxX: Number(maxX.toFixed(3)),
+        maxY: Number(maxY.toFixed(3))
+      }
+    };
   }
 }
 )SVGJS";

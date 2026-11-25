@@ -124,6 +124,114 @@ pre{white-space:pre-wrap;background:#eee;padding:10px;max-height:180px;overflow:
   .settings table{font-size:12px}
   .settings th,.settings td{padding:5px}
 }
+.svg-upload-step {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 2px solid #1769aa;
+  border-radius: 8px;
+  background: #f2f8ff;
+}
+
+.svg-upload-step h4 {
+  margin: 0 0 0.75rem;
+}
+
+.svg-upload-button {
+  display: inline-block;
+  padding: 0.8rem 1.2rem;
+  border-radius: 6px;
+  background: #1769aa;
+  color: #fff;
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.svg-upload-button:hover {
+  background: #0d4f87;
+}
+
+.svg-upload-button:focus-within,
+.svg-file-input:focus-visible + #svgFileName {
+  outline: 3px solid #ffbf47;
+  outline-offset: 3px;
+}
+
+.svg-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+  border: 0;
+}
+
+#svgFileName {
+  margin-left: 0.75rem;
+}
+#svgInfoTable {
+  border: 1px solid #888;
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+}
+
+#svgInfoTable th,
+#svgInfoTable td {
+  border: 1px solid #bbb;
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+#svgInfoTable thead th {
+  background: #f2f2f2;
+}
+
+#svgInfoTable tbody th {
+  background: #f8f8f8;
+}
+
+.svg-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 40%);
+  gap: 1rem;
+  align-items: start;
+}
+
+.svg-controls,
+.svg-preview-panel {
+  min-width: 0;
+}
+
+.svg-preview-panel {
+  position: sticky;
+  top: 1rem;
+  border: 1px solid #aaa;
+  padding: 0.75rem;
+  background: #fff;
+}
+
+#svgPreview {
+  display: none;
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+}
+
+@media (max-width: 750px) {
+  .svg-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .svg-preview-panel {
+    position: static;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -183,7 +291,8 @@ pre{white-space:pre-wrap;background:#eee;padding:10px;max-height:180px;overflow:
     <button onclick="saveFile()">Save / download</button>
   </p>
    <button onclick="command('G28')">Home X/Y</button>
-
+    <button onclick="frame()">Frame</button>
+  <label id="gcodeLineCount">GCode LineCount=0</label>
   <div class="editor">
     <pre id="lineNumbers" aria-hidden="true">1</pre>
     <textarea id="program" spellcheck="false" wrap="off"
@@ -209,39 +318,132 @@ pre{white-space:pre-wrap;background:#eee;padding:10px;max-height:180px;overflow:
 <section id="svg" class="tab">
   <h3>SVG to G-code</h3>
 
-  <p>
-  <input id="svgFile" type="file" accept=".svg,image/svg+xml"
-         onchange="previewSvg(this)">
-</p>
-<p>
-  <label>
-    Drawing feed (mm/min):
-    <input id="drawingFeedRate" type="number"
-           min="1" max="20000" step="10" value="70000"
-           onchange="saveDrawingFeedRate()">
-  </label>
-</p>
+  <div class="svg-layout">
+    <div class="svg-controls">
+      <!-- Keep Step 1 and Step 2, including the options and table, here. -->
+
+      <div class="svg-upload-step">
+        <h4>Step 1: Choose your SVG file</h4>
+
+        <label class="svg-upload-button" for="svgFile">
+          Choose SVG file
+        </label>
+        <input
+          id="svgFile"
+          class="svg-file-input"
+          type="file"
+          accept=".svg,image/svg+xml"
+          onchange="previewSvg(this)"
+        >
+        <span id="svgFileName" aria-live="polite">No file selected</span>
+      </div>
+
+      <div id="svg-upload-step" class="svg-upload-step" hidden>
+  <h4>Step 2: Options for your SVG file</h4>
 
   <p>
-    Work area: 100 mm by 100 mm.
+    <span id="svgInfo">Choose an SVG to see its size and complexity.</span>
+    <span id="svgInfoConverted"></span>
+  </p>
+
+  <p>
     <label>
-      Oversize handling
-      <select id="svgMode">
-        <option value="fit">Fit drawing to area</option>
-        <option value="crop">Keep size and crop outside area</option>
-      </select>
+      Drawing feed (mm/min):
+      <input id="drawingFeedRate" type="number"
+             min="1" max="3000" step="10" value="1500"
+             onchange="saveDrawingFeedRate()">
     </label>
   </p>
 
   <p>
-    <img id="svgPreview" alt="SVG preview"
-      style="display:none;max-width:100%;max-height:45vh;border:1px solid #aaa">
+    <label>
+      Width (mm):
+      <input id="svgWidth" type="number" min="1" value="80" step="1">
+    </label>
+    <label>
+      Height (mm):
+      <input id="svgHeight" type="number" min="1" value="80" step="1">
+    </label>
+    <span id="svgBedLimit"></span>
   </p>
 
- <button id="generateSvgButton" disabled
-        onclick="generateSvgGcode()">Generate G-code</button>
+  <p>
+    <label>
+      Simplification tolerance:
+      <input id="svgTolerance" type="range"
+             min="0" max="1" step="0.01" value="0.75">
+      <output id="svgToleranceValue">0.15 mm</output>
+    </label>
+    <br>
+    <small>0 disables simplification. Larger values remove more points but may alter details.</small>
+  </p>
+
+  <p>
+    <label>
+      <input id="ignoreViewBoxFrame" type="checkbox" checked>
+      Ignore a rectangle matching the SVG viewBox
+    </label>
+  </p>
+
+  <p>
+    <label for="svgMode">Sizing:</label>
+    <select id="svgMode">
+      <option value="fit">Fit to bed area</option>
+      <option value="actual">Use SVG physical size</option>
+    </select>
+  </p>
+
+  <table id="svgInfoTable">
+    <thead>
+      <tr>
+        <th></th>
+        <th>File size</th>
+        <th>Shapes</th>
+        <th>Points</th>
+        <th>Path-data characters</th>
+        <th>Removed</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <th scope="row">Orig File</th>
+        <td id="svgFileSize">-</td>
+        <td id="svgShapeCount">-</td>
+        <td id="svgPoints">-</td>
+        <td id="svgPathDataChars">-</td>
+        <td id="svgRemoved">-</td>
+      </tr>
+      <tr>
+        <th scope="row">Converted</th>
+        <td id="convertedFileSize">-</td>
+        <td id="convertedShapeCount">-</td>
+        <td id="convertedPoints">-</td>
+        <td id="convertedPathDataChars">-</td>
+        <td id="convertedRemoved">-</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p id="svgInfoStatus" aria-live="polite"></p>
+
+  <button id="simplifySVGButton" disabled
+          onclick="generateSvgGcode()">Simplify</button>
+  <button id="generateSvgButton" disabled
+          onclick="generateSvgGcode(true)">Generate G-code</button>
+
   <span id="svgMessage"></span>
+  <p id="svgWarning" role="status"></p>
+</div>
+
+    </div>
+
+    <aside class="svg-preview-panel" id="svgPreviewPanel" hidden>
+      <h4>SVG Preview</h4>
+      <img id="svgPreview" alt="SVG preview">
+    </aside>
+  </div>
 </section>
+
 
 <section id="help" class="tab">
   <h3>Instructions</h3>
@@ -291,7 +493,14 @@ void webBegin(Gcode& gcode) {
   WiFi.mode(WIFI_AP);
   WiFi.setSleep(false);
   WiFi.softAP(WIFI_SSID, WIFI_PASSWORD, 6, false, 4);
-  
+
+  server.on("/api/bed-size", HTTP_GET, []() {
+    server.send(
+      200,
+      "application/json",
+      String("{\"x\":") + BEDSIZE_X + ",\"y\":" + BEDSIZE_Y + "}");
+  });
+
   server.on("/api/endstop-polarity", HTTP_POST, []() {
     if (!server.hasArg("x") || !server.hasArg("y")) {
       sendError(400, "Missing x or y value");
@@ -536,6 +745,8 @@ void webBegin(Gcode& gcode) {
 
     String command = server.arg("g");
     command.trim();
+
+    Debugger::log(String("API /api/cmd command: ") + command);
 
     if (command == "$" || command == "$$") {
       String response = parser->settings();

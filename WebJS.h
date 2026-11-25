@@ -14,13 +14,25 @@ let pausedConsoleLines = [];
 const MAX_PAUSED_LOG_LINES = 2000;
 let restartCheckpoint = null;
 let restartInProgress = false;
+let svgBedSize = null;
+let currentFrameCommands = [];//when generate gcode, this stores the max x and max y
+
 
 function showTab(id) {
   document.querySelectorAll('.tab').forEach(e => e.classList.remove('active'));
   document.getElementById(id).classList.add('active');
 }
 
+async function frame() {
+  if (!currentFrameCommands.length) {
+    alert('Generate G-code before framing.');
+    return;
+  }
 
+  for (const command of currentFrameCommands) {
+    await runControlCommand(command);
+    }
+}
 
 function log(message) {
   if (consolePaused) {
@@ -143,7 +155,9 @@ document.getElementById('program').addEventListener('scroll', event => {
   document.getElementById('lineNumbers').scrollTop = event.target.scrollTop;
 });
 
+
 async function loadFile(input) {
+ 
   if (input.files && input.files[0]) {
     document.getElementById('program').value =
       await input.files[0].text();
@@ -212,6 +226,32 @@ async function getStatus(manual = false) {
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+
+async function loadSvgBedSize() {
+  const response = await fetch('/api/bed-size');
+  if (!response.ok) throw new Error('Could not load bed size');
+  svgBedSize = await response.json();
+
+  document.getElementById('svgWidth').max = svgBedSize.x;
+  document.getElementById('svgHeight').max = svgBedSize.y;
+  document.getElementById('svgBedLimit').textContent =
+    `Maximum: ${svgBedSize.x} mm X ${svgBedSize.y} mm`;
+}
+
+function readSvgDimension(id, max, label) {
+  const input = document.getElementById(id);
+  const value = Number(input.value);
+
+  if (!Number.isFinite(value) || value < 1 || value > max) {
+    input.setCustomValidity(`${label} must be from 1 to ${max} mm.`);
+    input.reportValidity();
+    return null;
+  }
+
+  input.setCustomValidity('');
+  return value;
+}
 
 async function waitUntilIdle() {
   while (!cancelJob) {
@@ -463,11 +503,84 @@ async function setDebugLogging(enabled) {
     log('Could not change debug logging: ' + error);
   }
 }
+async function updateSvgInfo(file) {
+  const status = document.getElementById('svgInfoStatus');
 
+  if (!file) {
+    status.textContent = 'Choose an SVG to see its size and complexity.';
+    for (const id of [
+      'svgFileSize',
+      'svgShapeCount',
+      'svgPoints',
+      'svgPathDataChars',
+      'svgRemoved'
+    ]) {
+      document.getElementById(id).textContent = '—';
+    }
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    const doc = new DOMParser().parseFromString(text, 'image/svg+xml');
+
+    if (doc.querySelector('parsererror')) {
+      status.textContent = 'Invalid SVG.';
+      document.getElementById('svgFileSize').textContent =
+        `${(file.size / 1024).toFixed(1)} KB`;
+      return;
+    }
+
+    const shapeCount = doc.querySelectorAll(
+      'path,line,polyline,polygon,rect,circle,ellipse'
+    ).length;
+
+    const pathDataChars = [...doc.querySelectorAll('path')]
+      .reduce((total, path) =>
+        total + (path.getAttribute('d') || '').length, 0);
+
+    document.getElementById('svgFileSize').textContent =
+      `${(file.size / 1024).toFixed(1)} KB`;
+    document.getElementById('svgShapeCount').textContent =
+      shapeCount.toLocaleString();
+    document.getElementById('svgPoints').textContent = '-';
+    document.getElementById('svgPathDataChars').textContent =
+      pathDataChars.toLocaleString();
+    document.getElementById('svgRemoved').textContent = '-';
+    status.textContent = '';
+  } catch (error) {
+    status.textContent = `Could not read SVG: ${error.message}`;
+  }
+}
+//Method to make frame command
+function makeFrameCommands(maxX, maxY) {
+  const feedRate = 4000;
+  return [
+    'G28 X0 Y0',
+    'M5',
+    'G0 X0 Y0',
+    `G1 X${maxX.toFixed(3)} Y0 F${feedRate}`,
+    `G1 X${maxX.toFixed(3)} Y${maxY.toFixed(3)} F${feedRate}`,
+    `G1 X0 Y${maxY.toFixed(3)} F${feedRate}`,
+    'G1 X0 Y0 F${feedRate}',
+  ];
+}
 function previewSvg(input) {
+
+  const hasFile = Boolean(input.files && input.files.length);
+  document.getElementById('svg-upload-step').hidden = !hasFile;
+  document.getElementById('svgPreviewPanel').hidden = !hasFile;
+  if (!hasFile) return;
+  
+  document.getElementById('svgFileName').textContent =
+  input.files?.[0]?.name || 'No file selected';
   const preview = document.getElementById('svgPreview');
   const message = document.getElementById('svgMessage');
   const generateButton = document.getElementById('generateSvgButton');
+  const simplifyButton = document.getElementById('simplifySVGButton');
+
+
+  updateSvgInfo(input.files[0])
 
   if (preview.dataset.url) {
     URL.revokeObjectURL(preview.dataset.url);
@@ -480,6 +593,7 @@ function previewSvg(input) {
     preview.removeAttribute('src');
     preview.style.display = 'none';
     generateButton.disabled = true;
+    simplifyButton.disabled = true;
     message.textContent = '';
     return;
   }
@@ -488,6 +602,7 @@ function previewSvg(input) {
   preview.src = preview.dataset.url;
   preview.style.display = 'block';
   generateButton.disabled = false;
+  simplifyButton.disabled = false;
   message.textContent = 'SVG loaded. Ready to generate G-code.';
 }
 
@@ -528,15 +643,17 @@ async function restartJob() {
 }
 
 async function runControlCommand(gcode) {
+  console.log('Sending control command:', gcode);
+
   const response = await fetch(
     '/api/cmd?g=' + encodeURIComponent(gcode)
   );
   const message = await response.text();
 
+  console.log('Control command response:', response.status, message);
+
   if (!response.ok) throw new Error(message);
 
-  // /api/cmd appends M30, so wait for that command to finish before
-  // submitting the next setup command.
   for (let i = 0; i < 240; i++) {
     const statusResponse = await fetch('/api/status');
     if (statusResponse.ok) {
@@ -548,7 +665,6 @@ async function runControlCommand(gcode) {
 
   throw new Error('Timed out waiting for ' + gcode);
 }
-
   
 async function setOwnershipLock(enabled) {
   const checkbox = document.getElementById('ownershipLock');
@@ -704,7 +820,7 @@ function saveDrawingFeedRate() {
 }
 
 
-async function generateSvgGcode() {
+async function generateSvgGcode(switchToGCodeTab=false) {
   const input = document.getElementById('svgFile');
   const message = document.getElementById('svgMessage');
   const file = input.files && input.files[0];
@@ -713,8 +829,17 @@ async function generateSvgGcode() {
     message.textContent = 'Choose an SVG file first.';
     return;
   }
+
+
   if (!saveDrawingFeedRate()) return;
 
+  if (!svgBedSize) await loadSvgBedSize();
+
+  const width = readSvgDimension('svgWidth', svgBedSize.x, 'Width');
+  if (width === null) return;
+
+  const height = readSvgDimension('svgHeight', svgBedSize.y, 'Height');
+  if (height === null) return;
   const drawingFeed = Number(
     document.getElementById('drawingFeedRate').value
   );
@@ -736,15 +861,46 @@ async function generateSvgGcode() {
   message.textContent = 'Converting...';
 
   try {
+   const tolerance = Number(document.getElementById('svgTolerance').value);
     const result = await SvgConverter.convert(
-      file, 80, 80,
+      file, width, height,
       document.getElementById('svgMode').value,
-      drawingFeed
+      drawingFeed,
+      tolerance,
+      document.getElementById('ignoreViewBoxFrame').value
     );
 
+
+const s = result.stats;
+
+currentFrameCommands = makeFrameCommands(  result.stats.maxX,  result.stats.maxY);
+document.getElementById('convertedFileSize').textContent =
+  `${(s.inputBytes / 1024).toFixed(1)} KB`;
+
+document.getElementById('convertedShapeCount').textContent =
+  s.shapeCount.toLocaleString();
+
+document.getElementById('convertedPoints').textContent =
+  `${s.sampledPointCount.toLocaleString()} to ` +
+  `${s.simplifiedPointCount.toLocaleString()}`;
+
+document.getElementById('convertedPathDataChars').textContent =
+  document.getElementById('svgPathDataChars').textContent;
+
+document.getElementById('convertedRemoved').textContent =
+  s.removedPointCount.toLocaleString();
+
+
+if (result.warning) {
+  document.getElementById('svgWarning').textContent = result.warning;
+}
+
+
     editor.value = result.gcode;
+   
+  document.getElementById('gcodeLineCount').textContent = `G-code line count: ${s.gcodeLineCount}`;
     updateLineNumbers();
-    showTab('file');
+    if (switchToGCodeTab) showTab('file');
 
     message.textContent = result.warning || 'G-code generated.';
     log('Generated G-code from ' + file.name);
@@ -759,4 +915,16 @@ updateLineNumbers();
 refreshHelp();
 refreshSettings();
 setInterval(getStatus, 1000);
+loadSvgBedSize();
+
+const toleranceInput = document.getElementById('svgTolerance');
+const toleranceValue = document.getElementById('svgToleranceValue');
+
+function updateToleranceLabel() {
+  toleranceValue.textContent =
+    `${Number(toleranceInput.value).toFixed(2)} mm`;
+}
+
+toleranceInput.addEventListener('input', updateToleranceLabel);
+updateToleranceLabel();
 )JS";

@@ -264,9 +264,14 @@ bool Motion::switchPressed(int pin) {
 bool Motion::home() {
   if (busy_) return false;
 
-  //xMotor.setMaxSpeed(homingSeekRateMmMin_ / 60.0f * xStepsPerMm_);
-  setMaxSpeed(xMotor, "X", homingSeekRateMmMin_ / 60.0f * xStepsPerMm_);
+const float xHomeSpeed = homingSeekRateMmMin_ / 60.0f * xStepsPerMm_;
+const float yHomeSpeed = homingSeekRateMmMin_ / 60.0f * yStepsPerMm_;
 
+xMotor.setMaxSpeed(xHomeSpeed);
+xMotor.setAcceleration(MAX_ACCELERATION_MM_S2 * xStepsPerMm_);
+
+yMotor.setMaxSpeed(yHomeSpeed);
+yMotor.setAcceleration(MAX_ACCELERATION_MM_S2 * yStepsPerMm_);
   //run the motor in the negative until we hit the switch or run out of space.
   /*
    * X AXIS.
